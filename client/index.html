@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>BattleRoyale 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden; background: #000;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+    #canvas { display: block; width: 100%; height: 100%; }
+
+    #loading {
+      position: fixed; inset: 0;
+      background: #0a0a0a;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 100;
+    }
+    #loading h1 {
+      color: #ff6b00;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 2.5rem;
+      letter-spacing: 6px;
+      text-shadow: 0 0 30px #ff6b00;
+      margin-bottom: 10px;
+    }
+    #loading p {
+      color: #888;
+      font-family: Arial, sans-serif;
+      font-size: 0.85rem;
+      margin-bottom: 30px;
+      letter-spacing: 2px;
+    }
+    #loading-bar-bg {
+      width: 220px; height: 4px;
+      background: #222; border-radius: 2px;
+    }
+    #loading-bar {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #ff6b00, #ffcc00);
+      border-radius: 2px;
+      transition: width 0.2s ease;
+    }
+
+    #menu {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 90; display: none;
+    }
+    #menu h1 {
+      color: #ff6b00;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 2.2rem;
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px #ff6b00;
+      margin-bottom: 8px;
+    }
+    #menu p {
+      color: #aaa;
+      font-family: Arial, sans-serif;
+      font-size: 0.8rem;
+      margin-bottom: 30px;
+    }
+    #name-input {
+      background: #1a1a1a;
+      border: 2px solid #ff6b00;
+      color: #fff;
+      font-size: 1.1rem;
+      padding: 12px 20px;
+      border-radius: 8px;
+      text-align: center;
+      width: 220px;
+      margin-bottom: 16px;
+      outline: none;
+    }
+    #play-btn {
+      background: linear-gradient(135deg, #ff6b00, #ff9500);
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 1.1rem;
+      letter-spacing: 3px;
+      padding: 14px 40px;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 0 0 20px rgba(255,107,0,0.5);
+    }
+
+    /* HUD */
+    #hud { position: fixed; inset: 0; pointer-events: none; z-index: 50; display: none; }
+
+    #crosshair {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px; height: 20px;
+    }
+    #crosshair::before, #crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255,255,255,0.8);
+    }
+    #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+    #crosshair::after  { width: 100%; height: 2px; top: 50%; transform: translateY(-50%); }
+
+    #health-container {
+      position: absolute;
+      bottom: 140px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+    }
+    #health-bar-bg {
+      width: 180px; height: 8px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 4px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    #health-bar {
+      height: 100%; width: 100%;
+      background: linear-gradient(90deg, #00e676, #69f0ae);
+      border-radius: 4px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    #health-text {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.75rem;
+      text-shadow: 0 1px 3px #000;
+    }
+
+    #ammo-display {
+      position: absolute;
+      bottom: 140px; right: 16px;
+      text-align: right;
+    }
+    #ammo-current {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 2rem;
+      text-shadow: 0 2px 4px #000;
+      line-height: 1;
+    }
+    #ammo-reserve {
+      color: #aaa;
+      font-family: Arial, sans-serif;
+      font-size: 0.85rem;
+      text-shadow: 0 1px 3px #000;
+    }
+    #weapon-name {
+      color: #ff9500;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.7rem;
+      letter-spacing: 2px;
+      text-shadow: 0 1px 3px #000;
+    }
+
+    #kills-display {
+      position: absolute;
+      top: 12px; left: 12px;
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.85rem;
+      text-shadow: 0 1px 3px #000;
+    }
+    #ping-display {
+      position: absolute;
+      top: 12px; right: 12px;
+      color: #00e676;
+      font-family: Arial, sans-serif;
+      font-size: 0.75rem;
+      text-shadow: 0 1px 3px #000;
+      text-align: right;
+    }
+    #players-display {
+      position: absolute;
+      top: 30px; left: 12px;
+      color: #aaa;
+      font-family: Arial, sans-serif;
+      font-size: 0.75rem;
+      text-shadow: 0 1px 3px #000;
+    }
+
+    #kill-feed {
+      position: absolute;
+      top: 60px; right: 12px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .kill-feed-item {
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border-left: 2px solid #ff6b00;
+    }
+
+    /* Controles táctiles */
+    #controls { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
+
+    #joystick-zone {
+      position: absolute;
+      bottom: 20px; left: 20px;
+      width: 130px; height: 130px;
+      pointer-events: all;
+    }
+    #joystick-base {
+      width: 130px; height: 130px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 2px solid rgba(255,255,255,0.2);
+      position: relative;
+    }
+    #joystick-knob {
+      width: 50px; height: 50px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      border: 2px solid rgba(255,255,255,0.4);
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      transition: none;
+    }
+
+    #look-zone {
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 55%; height: 70%;
+      pointer-events: all;
+    }
+
+    #fire-btn {
+      position: absolute;
+      bottom: 30px; right: 30px;
+      width: 75px; height: 75px;
+      border-radius: 50%;
+      background: rgba(255,50,50,0.7);
+      border: 3px solid rgba(255,100,100,0.8);
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: all;
+      box-shadow: 0 0 15px rgba(255,50,50,0.4);
+    }
+    #fire-btn span {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.65rem;
+      letter-spacing: 1px;
+    }
+
+    #jump-btn {
+      position: absolute;
+      bottom: 120px; right: 120px;
+      width: 55px; height: 55px;
+      border-radius: 50%;
+      background: rgba(100,150,255,0.6);
+      border: 2px solid rgba(150,180,255,0.7);
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: all;
+    }
+    #jump-btn span {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.6rem;
+    }
+
+    #reload-btn {
+      position: absolute;
+      bottom: 120px; right: 35px;
+      width: 50px; height: 50px;
+      border-radius: 50%;
+      background: rgba(255,180,0,0.6);
+      border: 2px solid rgba(255,200,50,0.7);
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: all;
+    }
+    #reload-btn span {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 0.55rem;
+    }
+
+    #death-screen {
+      position: fixed; inset: 0;
+      background: rgba(150,0,0,0.7);
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 80;
+    }
+    #death-screen h2 {
+      color: #fff;
+      font-family: 'Arial Black', sans-serif;
+      font-size: 2rem;
+      letter-spacing: 4px;
+      margin-bottom: 10px;
+    }
+    #death-screen p {
+      color: #ffcccc;
+      font-family: Arial, sans-serif;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="canvas"></canvas>
+
+  <div id="loading">
+    <h1>BATTLE ROYALE</h1>
+    <p>LOADING WORLD...</p>
+    <div id="loading-bar-bg">
+      <div id="loading-bar"></div>
+    </div>
+  </div>
+
+  <div id="menu">
+    <h1>BATTLE ROYALE</h1>
+    <p>ENTER THE ZONE</p>
+    <input id="name-input" type="text" placeholder="YOUR NAME" maxlength="16"/>
+    <button id="play-btn" onclick="window.game && window.game.startGame()">PLAY</button>
+  </div>
+
+  <div id="hud">
+    <div id="crosshair"></div>
+    <div id="kills-display">💀 <span id="kills-count">0</span></div>
+    <div id="players-display">👥 <span id="players-count">1</span> online</div>
+    <div id="ping-display"><span id="ping-value">--</span> ms</div>
+    <div id="health-container">
+      <div id="health-bar-bg"><div id="health-bar"></div></div>
+      <div id="health-text">100 HP</div>
+    </div>
+    <div id="ammo-display">
+      <div id="ammo-current">30</div>
+      <div id="ammo-reserve">/ 120</div>
+      <div id="weapon-name">ASSAULT RIFLE</div>
+    </div>
+    <div id="kill-feed"></div>
+  </div>
+
+  <div id="controls">
+    <div id="joystick-zone">
+      <div id="joystick-base">
+        <div id="joystick-knob"></div>
+      </div>
+    </div>
+    <div id="look-zone"></div>
+    <div id="fire-btn"><span>FIRE</span></div>
+    <div id="jump-btn"><span>JUMP</span></div>
+    <div id="reload-btn"><span>RELOAD</span></div>
+  </div>
+
+  <div id="death-screen">
+    <h2>💀 ELIMINATED</h2>
+    <p>Respawning...</p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script type="module" src="./src/main.js"></script>
+
+</body>
+    </html>
