@@ -9,15 +9,14 @@ export class NetworkManager {
     this.reconnectDelay = 2000;
     this.reconnectTimer = null;
 
-    // URL del servidor — actualizá esto cuando deployés el server
-    this.serverUrl = 'https://shooter-mp-server.onrender.com';
+    this.serverUrl = 'https://shooter-mp-production.up.railway.app';
   }
 
   connect() {
     try {
       this.socket = io(this.serverUrl, {
         transports: ['websocket', 'polling'],
-        reconnection: false, // manejamos reconexión manualmente
+        reconnection: false,
         timeout: 10000,
         forceNew: true
       });
@@ -43,7 +42,6 @@ export class NetworkManager {
       this.connected = false;
       this.scene.events.emit('networkDisconnected', reason);
 
-      // Reconectar solo si no fue intencional
       if (reason !== 'io client disconnect') {
         this.scheduleReconnect();
       }
@@ -55,7 +53,6 @@ export class NetworkManager {
       this.scheduleReconnect();
     });
 
-    // Jugadores existentes al unirse a la sala
     this.socket.on('currentPlayers', (players) => {
       Object.entries(players).forEach(([id, data]) => {
         if (id !== this.playerId) {
@@ -64,7 +61,6 @@ export class NetworkManager {
       });
     });
 
-    // Nuevo jugador entró
     this.socket.on('playerJoined', (data) => {
       if (data.id !== this.playerId) {
         this.scene.addRemotePlayer(data.id, data.x, data.y);
@@ -72,34 +68,29 @@ export class NetworkManager {
       }
     });
 
-    // Jugador salió
     this.socket.on('playerLeft', (id) => {
       this.scene.removeRemotePlayer(id);
       this.scene.events.emit('playerLeft', id);
     });
 
-    // Estado de jugador remoto (posición + ángulo)
     this.socket.on('playerMoved', (data) => {
       if (data.id !== this.playerId) {
         this.scene.updateRemotePlayer(data.id, data.x, data.y, data.angle);
       }
     });
 
-    // Bala disparada por jugador remoto
     this.socket.on('bulletFired', (data) => {
       if (data.id !== this.playerId) {
         this.scene.spawnRemoteBullet(data.x, data.y, data.angle, data.speed);
       }
     });
 
-    // Recibimos un impacto
     this.socket.on('hitReceived', (data) => {
       if (data.targetId === this.playerId) {
         this.scene.player.takeDamage(data.damage);
       }
     });
 
-    // Jugador eliminado
     this.socket.on('playerKilled', (data) => {
       if (data.id === this.playerId) {
         this.scene.events.emit('playerDied');
@@ -109,20 +100,23 @@ export class NetworkManager {
       }
     });
 
-    // Ping para medir latencia
+    this.socket.on('respawn', (data) => {
+      this.scene.player.sprite.setPosition(data.x, data.y);
+      this.scene.player.health = 100;
+      this.scene.events.emit('playerHealthChanged', 100);
+    });
+
     this.socket.on('pong_custom', (serverTime) => {
       const latency = Date.now() - serverTime;
       this.scene.events.emit('latencyUpdate', latency);
     });
   }
 
-  // Enviar posición del jugador local (throttled en GameScene)
   sendState(x, y, angle) {
     if (!this.connected) return;
     this.socket.volatile.emit('playerMove', { x, y, angle });
   }
 
-  // Enviar bala disparada
   sendBullet(angle, speed) {
     if (!this.connected) return;
     this.socket.emit('bulletFire', {
@@ -133,17 +127,14 @@ export class NetworkManager {
     });
   }
 
-  // Notificar impacto a jugador remoto
   sendHit(targetId) {
     if (!this.connected) return;
     this.socket.emit('playerHit', {
       targetId,
-      damage: this.scene.player.bulletsGroup
-        .getFirstAlive()?.damage ?? 25
+      damage: 25
     });
   }
 
-  // Medir latencia
   ping() {
     if (!this.connected) return;
     this.socket.emit('ping_custom', Date.now());
@@ -175,4 +166,4 @@ export class NetworkManager {
     }
     this.connected = false;
   }
-    }
+        }
