@@ -5,10 +5,8 @@ class GameRoom {
     this.io = io;
     this.players = {};
     this.maxPlayers = 20;
-    this.tickRate = 20; // 20 ticks por segundo
-    this.lastTick = Date.now();
+    this.tickRate = 20;
 
-    // Loop del servidor
     setInterval(() => this.tick(), 1000 / this.tickRate);
   }
 
@@ -19,14 +17,13 @@ class GameRoom {
       return;
     }
 
-    // Spawn en posición aleatoria dentro del mapa
-    const spawnX = Phaser ? null : this.randomSpawn();
-    const x = 100 + Math.floor(Math.random() * 1400);
-    const y = 100 + Math.floor(Math.random() * 1400);
+    const name = socket.handshake.query.name || 'Player_' + socket.id.slice(0, 4);
+    const x = (Math.random() - 0.5) * 100;
+    const z = (Math.random() - 0.5) * 100;
 
-    this.players[socket.id] = new PlayerState(socket.id, x, y);
+    this.players[socket.id] = new PlayerState(socket.id, x, 1.7, z, name);
 
-    // Enviar estado actual de todos los jugadores al nuevo
+    // Enviar jugadores actuales al nuevo
     const currentPlayers = {};
     Object.entries(this.players).forEach(([id, p]) => {
       if (id !== socket.id) {
@@ -35,53 +32,52 @@ class GameRoom {
     });
     socket.emit('currentPlayers', currentPlayers);
 
-    // Notificar a todos que entró un jugador nuevo
+    // Notificar a todos
     socket.broadcast.emit('playerJoined', {
       id: socket.id,
-      x,
-      y
+      ...this.players[socket.id].serialize()
     });
 
-    console.log(`[GameRoom] Jugador añadido: ${socket.id} en (${x}, ${y})`);
+    console.log(`[GameRoom] + ${name} (${socket.id}) en (${x.toFixed(0)}, ${z.toFixed(0)})`);
   }
 
   removePlayer(id) {
     if (!this.players[id]) return;
+    const name = this.players[id].name;
     delete this.players[id];
     this.io.emit('playerLeft', id);
-    console.log(`[GameRoom] Jugador eliminado: ${id}`);
+    console.log(`[GameRoom] - ${name} (${id})`);
   }
 
   handleMove(id, data) {
     const player = this.players[id];
     if (!player) return;
 
-    // Validación básica anti-cheat: velocidad máxima
     const maxSpeed = 200;
     const dx = data.x - player.x;
-    const dy = data.y - player.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dz = data.z - player.z;
+    const dist = Math.sqrt(dx*dx + dz*dz);
     const timeDelta = (Date.now() - player.lastUpdate) / 1000;
-    const maxDist = maxSpeed * timeDelta * 1.5; // 50% de tolerancia por lag
+    const maxDist = maxSpeed * Math.max(timeDelta, 0.05) * 1.5;
 
     if (dist > maxDist && player.lastUpdate !== 0) {
-      // Movimiento sospechoso — ignorar pero no kickear todavía
-      console.warn(`[GameRoom] Movimiento sospechoso de ${id}: ${dist.toFixed(1)}px`);
+      console.warn(`[GameRoom] Movimiento sospechoso de ${player.name}: ${dist.toFixed(1)}px`);
       return;
     }
 
-    // Validar límites del mapa
-    const clampedX = Math.max(32, Math.min(data.x, 1568));
-    const clampedY = Math.max(32, Math.min(data.y, 1568));
+    const clampedX = Math.max(-195, Math.min(195, data.x));
+    const clampedZ = Math.max(-195, Math.min(195, data.z));
 
-    player.updatePosition(clampedX, clampedY, data.angle);
+    player.updatePosition(clampedX, data.y || 1.7, clampedZ, data.rotY || 0);
 
-    // Broadcast a todos menos al emisor (volatile = no garantizado, ok para posición)
     this.io.volatile.emit('playerMoved', {
       id,
       x: clampedX,
-      y: clampedY,
-      angle: data.angle
+      y: data.y || 1.7,
+      z: clampedZ,
+      rotY: data.rotY || 0,
+      health: player.health,
+      name: player.name
     });
   }
 
@@ -89,25 +85,21 @@ class GameRoom {
     const player = this.players[id];
     if (!player) return;
 
-    // Validar rate de disparo
     const now = Date.now();
-    const minFireInterval = 200; // ms mínimo entre balas
-    if (now - player.lastFired < minFireInterval) {
-      console.warn(`[GameRoom] Fire rate sospechoso de ${id}`);
-      return;
-    }
+    const minFireInterval = 80;
+    if (now - player.lastFired < minFireInterval) return;
     player.lastFired = now;
 
     // Broadcast bala a todos menos al emisor
-    this.io.to(Array.from(this.io.sockets.sockets.keys())
-      .filter(sid => sid !== id))
-      .emit('bulletFired', {
+    const sockets = Array.from(this.io.sockets.sockets.keys()).filter(s => s !== id);
+    sockets.forEach(sid => {
+      const s = this.io.sockets.sockets.get(sid);
+      if (s) s.emit('playerShot', {
         id,
-        x: data.x,
-        y: data.y,
-        angle: data.angle,
-        speed: data.speed
+        from: data.from,
+        dir: data.dir
       });
+    });
   }
 
   handleHit(shooterId, data) {
@@ -115,12 +107,11 @@ class GameRoom {
     const target = this.players[data.targetId];
     if (!shooter || !target) return;
 
-    const damage = 25; // Daño fijo server-side
-    target.health -= damage;
+    const damage = Math.min(Math.max(data.damage || 25, 1), 100);
+    const died = target.takeDamage(damage);
 
-    console.log(`[GameRoom] ${shooterId} golpeó a ${data.targetId} — HP restante: ${target.health}`);
+    console.log(`[GameRoom] ${shooter.name} → ${target.name} (${damage} dmg, HP: ${target.health})`);
 
-    // Notificar al objetivo que recibió daño
     const targetSocket = this.io.sockets.sockets.get(data.targetId);
     if (targetSocket) {
       targetSocket.emit('hitReceived', {
@@ -130,23 +121,26 @@ class GameRoom {
       });
     }
 
-    // Verificar si murió
-    if (target.health <= 0) {
-      target.health = 0;
+    if (died) {
+      shooter.kills++;
+      console.log(`[GameRoom] ${shooter.name} eliminó a ${target.name} (kills: ${shooter.kills})`);
+
       this.io.emit('playerKilled', {
         id: data.targetId,
-        killerId: shooterId
+        killerId: shooterId,
+        killerName: shooter.name,
+        victimName: target.name
       });
 
-      // Respawn después de 3 segundos
       setTimeout(() => {
         if (this.players[data.targetId]) {
           this.players[data.targetId].respawn();
-          const targetSocket = this.io.sockets.sockets.get(data.targetId);
-          if (targetSocket) {
-            targetSocket.emit('respawn', {
+          const ts = this.io.sockets.sockets.get(data.targetId);
+          if (ts) {
+            ts.emit('respawn', {
               x: this.players[data.targetId].x,
-              y: this.players[data.targetId].y
+              y: 1.7,
+              z: this.players[data.targetId].z
             });
           }
         }
@@ -155,16 +149,11 @@ class GameRoom {
   }
 
   tick() {
-    // En el futuro: lógica de zona, power-ups, etc.
-    this.lastTick = Date.now();
+    // Futuro: zona, power-ups, eventos
   }
 
   getPlayerCount() {
     return Object.keys(this.players).length;
-  }
-
-  randomSpawn() {
-    return 100 + Math.floor(Math.random() * 1400);
   }
 }
 
