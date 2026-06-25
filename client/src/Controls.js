@@ -1,9 +1,10 @@
 export class Controls {
-  constructor(player, camera) {
+  constructor(player, camera, weapons, sounds) {
     this.player = player;
     this.camera = camera;
+    this.weapons = weapons;
+    this.sounds = sounds;
 
-    // Joystick movimiento
     this.joystick = {
       active: false,
       pointerId: null,
@@ -13,7 +14,6 @@ export class Controls {
       dy: 0
     };
 
-    // Look (girar cámara)
     this.look = {
       active: false,
       pointerId: null,
@@ -55,7 +55,6 @@ export class Controls {
         }
         this.joystick.dx = dx;
         this.joystick.dy = dy;
-
         knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
       }
     }, { passive: false });
@@ -108,40 +107,29 @@ export class Controls {
   }
 
   setupButtons() {
-    // Botón FIRE
     const fireBtn = document.getElementById('fire-btn');
     fireBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
-      this.player.startFire();
+      this.weapons.startFire();
+      if (this.sounds) this.sounds.resume();
     }, { passive: false });
     fireBtn.addEventListener('touchend', (e) => {
       e.preventDefault();
-      this.player.stopFire();
+      this.weapons.stopFire();
     }, { passive: false });
 
-    // Botón JUMP
     const jumpBtn = document.getElementById('jump-btn');
     jumpBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.player.jump();
+      if (this.sounds) this.sounds.playJump();
     }, { passive: false });
 
-    // Botón RELOAD
     const reloadBtn = document.getElementById('reload-btn');
     reloadBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
-      this.player.startReload();
+      this.weapons.startReload();
+      if (this.sounds) this.sounds.playReload();
     }, { passive: false });
-  }
 
-  update(dt) {
-    if (!this.joystick.active) return;
-
-    const maxDist = 40;
-    const fx = this.joystick.dx / maxDist;
-    const fy = this.joystick.dy / maxDist;
-
-    const speed = this.player.speed;
-    this.player.move(-fy * speed * dt, fx * speed * dt);
-  }
-            }
+    // Botón cambiar arma (doble tap zona derecha)
