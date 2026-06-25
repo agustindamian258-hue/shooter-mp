@@ -38,8 +38,7 @@ export class Network {
       this.reconnectAttempts = 0;
 
       this.pingInterval = setInterval(() => {
-        const now = Date.now();
-        this.socket.emit('ping_custom', now);
+        this.socket.emit('ping_custom', Date.now());
       }, 3000);
     });
 
@@ -53,7 +52,7 @@ export class Network {
     });
 
     this.socket.on('connect_error', (err) => {
-      console.error('[Network] Error conexión:', err.message);
+      console.error('[Network] Error:', err.message);
       this.connected = false;
       this.scheduleReconnect();
     });
@@ -96,17 +95,18 @@ export class Network {
         const dir = new THREE.Vector3(data.dir.x, data.dir.y, data.dir.z);
         const to = from.clone().addScaledVector(dir, 100);
         this.game.spawnBulletTrail(from, to);
-
-        // Sonido de disparo remoto (más suave)
-        if (this.game.sounds) {
-          this.game.sounds.playShot('rifle');
-        }
+        if (this.game.sounds) this.game.sounds.playShot('rifle');
       }
     });
 
     this.socket.on('hitReceived', (data) => {
       if (data.targetId === this.playerId) {
-        this.game.player.takeDamage(data.damage);
+        // Escudo absorbe primero
+        let damage = data.damage;
+        if (this.game.shield && this.game.shield.current > 0) {
+          damage = this.game.shield.takeDamage(damage);
+        }
+        if (damage > 0) this.game.player.takeDamage(damage);
       }
     });
 
@@ -115,7 +115,7 @@ export class Network {
         this.game.showDeathScreen();
       } else {
         const rp = this.game.remotePlayers[data.id];
-        const victimName = rp ? rp.name : data.id.slice(0, 6);
+        const victimName = rp ? rp.name : data.victimName || data.id.slice(0, 6);
 
         if (data.killerId === this.playerId) {
           this.game.onEnemyKilled(data.id, victimName);
@@ -132,14 +132,44 @@ export class Network {
     });
 
     this.socket.on('respawn', (data) => {
-      this.game.player.camera.position.set(
-        data.x,
-        data.y || 1.7,
-        data.z
-      );
+      this.game.player.camera.position.set(data.x, data.y || 1.7, data.z);
       this.game.player.health = 100;
       this.game.player.alive = true;
       if (this.game.hud) this.game.hud.updateHealth(100);
+    });
+
+    // Chat de proximidad
+    this.socket.on('chatMessage', (data) => {
+      if (data.senderId !== this.playerId && this.game.chat) {
+        this.game.chat.receiveMessage(data);
+      }
+    });
+
+    // Granada remota
+    this.socket.on('grenadeExploded', (data) => {
+      if (this.game.particles) {
+        const pos = new THREE.Vector3(data.x, data.y, data.z);
+        this.game.particles.spawnExplosion(pos);
+      }
+      if (this.game.sounds) {
+        this.game.sounds.playBuffer(this.game.sounds.sounds.shotgun, 1.0);
+      }
+
+      // Daño si el jugador local está cerca
+      const playerPos = this.game.player.camera.position;
+      const dx = data.x - playerPos.x;
+      const dy = data.y - playerPos.y;
+      const dz = data.z - playerPos.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+      if (dist < data.radius && data.throwerId !== this.playerId) {
+        const dmg = data.damage * (1 - dist / data.radius);
+        let damage = Math.round(dmg);
+        if (this.game.shield && this.game.shield.current > 0) {
+          damage = this.game.shield.takeDamage(damage);
+        }
+        if (damage > 0) this.game.player.takeDamage(damage);
+      }
     });
 
     this.socket.on('roomFull', () => {
@@ -164,6 +194,17 @@ export class Network {
     this.socket.emit('playerHit', { targetId, damage });
   }
 
+  sendChatMessage(text, position) {
+    if (!this.connected) return;
+    this.socket.emit('chatMessage', {
+      text,
+      name: this.playerName,
+      x: position.x,
+      y: position.y,
+      z: position.z
+    });
+  }
+
   scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnects) {
       console.error('[Network] Sin conexión');
@@ -186,4 +227,4 @@ export class Network {
     }
     this.connected = false;
   }
-    }
+        }
