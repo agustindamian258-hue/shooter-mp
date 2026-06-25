@@ -1,9 +1,12 @@
 export class Controls {
-  constructor(player, camera, weapons, sounds) {
+  constructor(player, camera, weapons, sounds, sprint, crouch, grenades) {
     this.player = player;
     this.camera = camera;
     this.weapons = weapons;
     this.sounds = sounds;
+    this.sprint = sprint;
+    this.crouch = crouch;
+    this.grenades = grenades;
 
     this.joystick = {
       active: false,
@@ -67,7 +70,18 @@ export class Controls {
         this.joystick.dx = 0;
         this.joystick.dy = 0;
         knob.style.transform = 'translate(-50%, -50%)';
+        if (this.sprint) this.sprint.stopSprint();
       }
+    }, { passive: false });
+
+    // Doble tap en joystick = sprint
+    let lastJoyTap = 0;
+    zone.addEventListener('touchstart', (e) => {
+      const now = Date.now();
+      if (now - lastJoyTap < 300) {
+        if (this.sprint) this.sprint.startSprint();
+      }
+      lastJoyTap = now;
     }, { passive: false });
   }
 
@@ -104,18 +118,38 @@ export class Controls {
         this.look.active = false;
       }
     }, { passive: false });
+
+    // Doble tap zona derecha = cambiar arma
+    let lastTap = 0;
+    zone.addEventListener('touchstart', (e) => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        if (this.weapons) {
+          this.weapons.switchWeapon();
+          if (this.player.world.game && this.player.world.game.hud) {
+            const g = this.player.world.game;
+            g.hud.showWeaponSwitch(
+              this.weapons.inventory,
+              this.weapons.currentIndex,
+              this.weapons.weapons
+            );
+          }
+        }
+      }
+      lastTap = now;
+    }, { passive: false });
   }
 
   setupButtons() {
     const fireBtn = document.getElementById('fire-btn');
     fireBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
-      this.weapons.startFire();
+      if (this.weapons) this.weapons.startFire();
       if (this.sounds) this.sounds.resume();
     }, { passive: false });
     fireBtn.addEventListener('touchend', (e) => {
       e.preventDefault();
-      this.weapons.stopFire();
+      if (this.weapons) this.weapons.stopFire();
     }, { passive: false });
 
     const jumpBtn = document.getElementById('jump-btn');
@@ -128,8 +162,17 @@ export class Controls {
     const reloadBtn = document.getElementById('reload-btn');
     reloadBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
-      this.weapons.startReload();
+      if (this.weapons) this.weapons.startReload();
       if (this.sounds) this.sounds.playReload();
     }, { passive: false });
+  }
 
-    // Botón cambiar arma (doble tap zona derecha)
+  update(dt) {
+    if (!this.joystick.active) return;
+    const maxDist = 40;
+    const fx = this.joystick.dx / maxDist;
+    const fy = this.joystick.dy / maxDist;
+    const speed = this.player.speed;
+    this.player.move(-fy * speed * dt, fx * speed * dt);
+  }
+              }
