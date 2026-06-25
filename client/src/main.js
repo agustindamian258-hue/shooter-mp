@@ -8,6 +8,14 @@ import { Zone } from './Zone.js';
 import { WeaponSystem } from './Weapons.js';
 import { SoundSystem } from './Sounds.js';
 import { ParticleSystem } from './Particles.js';
+import { NameTags } from './NameTags.js';
+import { Scoreboard } from './Scoreboard.js';
+import { Shield } from './Shield.js';
+import { LootSystem } from './Loot.js';
+import { ProximityChat } from './ProximityChat.js';
+import { Sprint } from './Sprint.js';
+import { Crouch } from './Crouch.js';
+import { GrenadeSystem } from './Grenade.js';
 
 class Game {
   constructor() {
@@ -22,11 +30,20 @@ class Game {
     this.weapons = null;
     this.sounds = null;
     this.particles = null;
+    this.nameTags = null;
+    this.scoreboard = null;
+    this.shield = null;
+    this.loot = null;
+    this.chat = null;
+    this.sprint = null;
+    this.crouch = null;
+    this.grenades = null;
     this.remotePlayers = {};
     this.running = false;
     this.clock = { last: 0, delta: 0 };
     this.footstepTimer = 0;
     this.footstepInterval = 0.4;
+    this.playerName = 'Player';
 
     this.init();
   }
@@ -35,7 +52,6 @@ class Game {
     this.simulateLoading();
 
     this.sounds = new SoundSystem();
-
     this.world = new World(this.canvas);
     this.player = new Player(this.world);
     this.hud = new HUD();
@@ -47,8 +63,25 @@ class Game {
     this.particles = new ParticleSystem(this.world.scene);
     this.world.particles = this.particles;
 
-    this.controls = new Controls(this.player, this.world.camera, this.weapons, this.sounds);
+    this.shield = new Shield(this.player, this.hud);
+    this.sprint = new Sprint(this.player, this.sounds);
+    this.crouch = new Crouch(this.player, this.sounds);
+    this.grenades = new GrenadeSystem(this.world, this);
+
+    this.controls = new Controls(
+      this.player,
+      this.world.camera,
+      this.weapons,
+      this.sounds,
+      this.sprint,
+      this.crouch,
+      this.grenades
+    );
+
     this.minimap = new Minimap(this);
+    this.nameTags = new NameTags(this);
+    this.scoreboard = new Scoreboard(this);
+    this.chat = new ProximityChat(this);
     this.network = new Network(this);
 
     this.world.setGame(this);
@@ -80,9 +113,23 @@ class Game {
 
     this.zone = new Zone(this.world, this.hud);
     this.minimap.show();
+    this.shield.show();
+    this.sprint.show();
+    this.crouch.show();
+    this.grenades.show();
+    this.chat.show();
+    this.scoreboard.show();
+
     this.network.connect(this.playerName);
     this.sounds.resume();
     this.sounds.playWindLoop();
+
+    // Actualizar scoreboard con jugador local
+    this.scoreboard.updatePlayer(
+      'local',
+      this.playerName,
+      0, 0, 100
+    );
 
     this.running = true;
     this.loop(0);
@@ -100,9 +147,14 @@ class Game {
     this.player.update(dt);
     this.weapons.update(dt, this);
     this.particles.update(dt);
+    this.shield.update(dt);
+    this.sprint.update(dt);
+    this.crouch.update(dt);
+    this.grenades.update(dt);
 
     if (this.zone) this.zone.update(dt, this.player);
     this.minimap.update();
+    this.nameTags.update();
 
     this.updateRemotePlayers(dt);
     this.updateFootsteps(dt);
@@ -111,6 +163,15 @@ class Game {
     if (this.network.connected) {
       this.network.sendState();
     }
+
+    // Actualizar scoreboard local
+    this.scoreboard.updatePlayer(
+      'local',
+      this.playerName,
+      this.player.kills || 0,
+      0,
+      this.player.health
+    );
   }
 
   updateFootsteps(dt) {
@@ -122,7 +183,8 @@ class Game {
       this.footstepTimer -= dt;
       if (this.footstepTimer <= 0) {
         this.sounds.playFootstep();
-        this.footstepTimer = this.footstepInterval;
+        this.footstepTimer = this.sprint.isSprinting ?
+          this.footstepInterval * 0.6 : this.footstepInterval;
         this.particles.spawnDust(this.player.camera.position.clone());
       }
     } else {
@@ -141,6 +203,10 @@ class Game {
       targetPos: { x: data.x, y: data.y || 1.7, z: data.z || 0 },
       targetRot: data.rotY || 0
     };
+
+    this.nameTags.addTag(id, data.name || 'Player');
+    this.scoreboard.updatePlayer(id, data.name || 'Player', 0, 0, 100);
+
     if (this.hud) {
       this.hud.updatePlayers(Object.keys(this.remotePlayers).length + 1);
     }
@@ -152,6 +218,10 @@ class Game {
     rp.targetPos = { x: data.x, y: data.y, z: data.z };
     rp.targetRot = data.rotY;
     rp.health = data.health;
+    rp.name = data.name || rp.name;
+
+    this.nameTags.updateTag(id, data.health);
+    this.scoreboard.updatePlayer(id, rp.name, 0, 0, data.health);
   }
 
   removeRemotePlayer(id) {
@@ -159,6 +229,9 @@ class Game {
     if (!rp) return;
     this.world.scene.remove(rp.mesh);
     delete this.remotePlayers[id];
+    this.nameTags.removeTag(id);
+    this.scoreboard.removePlayer(id);
+
     if (this.hud) {
       this.hud.updatePlayers(Object.keys(this.remotePlayers).length + 1);
     }
@@ -187,9 +260,7 @@ class Game {
 
   onEnemyKilled(id, name) {
     const rp = this.remotePlayers[id];
-    if (rp) {
-      this.particles.spawnExplosion(rp.mesh.position.clone());
-    }
+    if (rp) this.particles.spawnExplosion(rp.mesh.position.clone());
     this.removeRemotePlayer(id);
     this.sounds.playKill();
     if (this.hud) {
@@ -201,17 +272,22 @@ class Game {
 
   showDeathScreen() {
     this.sounds.playDeath();
+    this.player.alive = false;
     document.getElementById('death-screen').style.display = 'flex';
     setTimeout(() => {
       document.getElementById('death-screen').style.display = 'none';
       this.player.respawn();
-      this.weapons.currentWeapon.ammo = this.weapons.currentWeapon.maxAmmo;
-      if (this.hud) {
-        this.hud.updateHealth(100);
-        this.hud.updateAmmo(
-          this.weapons.currentWeapon.ammo,
-          this.weapons.currentWeapon.reserve
-        );
+      this.shield.current = 0;
+      this.shield.updateUI();
+      if (this.weapons) {
+        this.weapons.currentWeapon.ammo = this.weapons.currentWeapon.maxAmmo;
+        if (this.hud) {
+          this.hud.updateHealth(100);
+          this.hud.updateAmmo(
+            this.weapons.currentWeapon.ammo,
+            this.weapons.currentWeapon.reserve
+          );
+        }
       }
     }, 3000);
   }
