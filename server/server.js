@@ -17,12 +17,12 @@ const io = new Server(httpServer, {
 
 const PORT = process.env.PORT || 3000;
 
-// Health check para Render.com (evita que el server se duerma)
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
     players: gameRoom.getPlayerCount(),
-    uptime: process.uptime()
+    uptime: Math.round(process.uptime()),
+    version: '2.0'
   });
 });
 
@@ -33,11 +33,11 @@ app.get('/health', (req, res) => {
 const gameRoom = new GameRoom(io);
 
 io.on('connection', (socket) => {
-  console.log(`[Server] Jugador conectado: ${socket.id}`);
+  console.log(`[Server] + Conexión: ${socket.id}`);
   gameRoom.addPlayer(socket);
 
   socket.on('disconnect', (reason) => {
-    console.log(`[Server] Jugador desconectado: ${socket.id} — ${reason}`);
+    console.log(`[Server] - Desconexión: ${socket.id} — ${reason}`);
     gameRoom.removePlayer(socket.id);
   });
 
@@ -53,20 +53,6 @@ io.on('connection', (socket) => {
     gameRoom.handleHit(socket.id, data);
   });
 
-  socket.on('ping_custom', (clientTime) => {
-    socket.emit('pong_custom', clientTime);
-  });
-});
-
-httpServer.listen(PORT, () => {
-  console.log(`[Server] Corriendo en puerto ${PORT}`);
-});
-
-// Manejo de errores no capturados para evitar crashes
-process.on('uncaughtException', (err) => {
-  console.error('[Server] Error no capturado:', err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[Server] Promesa rechazada:', reason);
-});
+  socket.on('chatMessage', (data) => {
+    gameRoom.handleChat(socket.id, data);
+  }
