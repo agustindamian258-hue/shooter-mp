@@ -23,7 +23,6 @@ class GameRoom {
 
     this.players[socket.id] = new PlayerState(socket.id, x, 1.7, z, name);
 
-    // Enviar jugadores actuales al nuevo
     const currentPlayers = {};
     Object.entries(this.players).forEach(([id, p]) => {
       if (id !== socket.id) {
@@ -32,13 +31,12 @@ class GameRoom {
     });
     socket.emit('currentPlayers', currentPlayers);
 
-    // Notificar a todos
     socket.broadcast.emit('playerJoined', {
       id: socket.id,
       ...this.players[socket.id].serialize()
     });
 
-    console.log(`[GameRoom] + ${name} (${socket.id}) en (${x.toFixed(0)}, ${z.toFixed(0)})`);
+    console.log(`[GameRoom] + ${name} en (${x.toFixed(0)}, ${z.toFixed(0)})`);
   }
 
   removePlayer(id) {
@@ -46,14 +44,14 @@ class GameRoom {
     const name = this.players[id].name;
     delete this.players[id];
     this.io.emit('playerLeft', id);
-    console.log(`[GameRoom] - ${name} (${id})`);
+    console.log(`[GameRoom] - ${name}`);
   }
 
   handleMove(id, data) {
     const player = this.players[id];
     if (!player) return;
 
-    const maxSpeed = 200;
+    const maxSpeed = 250;
     const dx = data.x - player.x;
     const dz = data.z - player.z;
     const dist = Math.sqrt(dx*dx + dz*dz);
@@ -61,7 +59,7 @@ class GameRoom {
     const maxDist = maxSpeed * Math.max(timeDelta, 0.05) * 1.5;
 
     if (dist > maxDist && player.lastUpdate !== 0) {
-      console.warn(`[GameRoom] Movimiento sospechoso de ${player.name}: ${dist.toFixed(1)}px`);
+      console.warn(`[GameRoom] Movimiento sospechoso: ${player.name} ${dist.toFixed(1)}px`);
       return;
     }
 
@@ -90,7 +88,6 @@ class GameRoom {
     if (now - player.lastFired < minFireInterval) return;
     player.lastFired = now;
 
-    // Broadcast bala a todos menos al emisor
     const sockets = Array.from(this.io.sockets.sockets.keys()).filter(s => s !== id);
     sockets.forEach(sid => {
       const s = this.io.sockets.sockets.get(sid);
@@ -123,7 +120,7 @@ class GameRoom {
 
     if (died) {
       shooter.kills++;
-      console.log(`[GameRoom] ${shooter.name} eliminó a ${target.name} (kills: ${shooter.kills})`);
+      console.log(`[GameRoom] ${shooter.name} eliminó a ${target.name}`);
 
       this.io.emit('playerKilled', {
         id: data.targetId,
@@ -148,8 +145,110 @@ class GameRoom {
     }
   }
 
+  handleChat(senderId, data) {
+    const player = this.players[senderId];
+    if (!player) return;
+
+    // Validar texto
+    const text = String(data.text || '').slice(0, 60).trim();
+    if (!text) return;
+
+    console.log(`[Chat] ${player.name}: ${text}`);
+
+    // Broadcast a todos los demás con posición del emisor
+    this.io.emit('chatMessage', {
+      senderId,
+      name: player.name,
+      text,
+      x: player.x,
+      y: player.y,
+      z: player.z
+    });
+  }
+
+  handleGrenade(throwerId, data) {
+    const player = this.players[throwerId];
+    if (!player) return;
+
+    // Broadcast granada a todos menos al lanzador
+    const sockets = Array.from(this.io.sockets.sockets.keys()).filter(s => s !== throwerId);
+    sockets.forEach(sid => {
+      const s = this.io.sockets.sockets.get(sid);
+      if (s) s.emit('grenadeThrown', {
+        throwerId,
+        x: data.x,
+        y: data.y,
+        z: data.z,
+        vx: data.vx,
+        vy: data.vy,
+        vz: data.vz
+      });
+    });
+  }
+
+  handleGrenadeExplode(throwerId, data) {
+    const player = this.players[throwerId];
+    if (!player) return;
+
+    // Broadcast explosión a todos
+    this.io.emit('grenadeExploded', {
+      throwerId,
+      x: data.x,
+      y: data.y,
+      z: data.z,
+      radius: Math.min(data.radius || 8, 15),
+      damage: Math.min(data.damage || 80, 100)
+    });
+
+    // Aplicar daño server-side a jugadores cercanos
+    Object.entries(this.players).forEach(([id, p]) => {
+      if (id === throwerId) return;
+      const dx = data.x - p.x;
+      const dy = data.y - p.y;
+      const dz = data.z - p.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      const radius = Math.min(data.radius || 8, 15);
+
+      if (dist < radius) {
+        const dmg = Math.round(data.damage * (1 - dist / radius));
+        const died = p.takeDamage(dmg);
+
+        const targetSocket = this.io.sockets.sockets.get(id);
+        if (targetSocket) {
+          targetSocket.emit('hitReceived', {
+            targetId: id,
+            shooterId: throwerId,
+            damage: dmg
+          });
+        }
+
+        if (died) {
+          player.kills++;
+          this.io.emit('playerKilled', {
+            id,
+            killerId: throwerId,
+            killerName: player.name,
+            victimName: p.name
+          });
+
+          setTimeout(() => {
+            if (this.players[id]) {
+              this.players[id].respawn();
+              const ts = this.io.sockets.sockets.get(id);
+              if (ts) ts.emit('respawn', {
+                x: this.players[id].x,
+                y: 1.7,
+                z: this.players[id].z
+              });
+            }
+          }, 3000);
+        }
+      }
+    });
+  }
+
   tick() {
-    // Futuro: zona, power-ups, eventos
+    // Futuro: zona server-side, eventos
   }
 
   getPlayerCount() {
