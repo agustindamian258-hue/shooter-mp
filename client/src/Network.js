@@ -10,7 +10,6 @@ export class Network {
     this.reconnectDelay = 2000;
     this.reconnectTimer = null;
     this.pingInterval = null;
-    this.lastPingTime = 0;
     this.serverUrl = 'https://shooter-mp-production.up.railway.app';
   }
 
@@ -26,7 +25,7 @@ export class Network {
       });
       this.setupListeners();
     } catch (err) {
-      console.error('[Network] Error al conectar:', err);
+      console.error('[Network] Error:', err);
       this.scheduleReconnect();
     }
   }
@@ -39,8 +38,8 @@ export class Network {
       this.reconnectAttempts = 0;
 
       this.pingInterval = setInterval(() => {
-        this.lastPingTime = Date.now();
-        this.socket.emit('ping_custom', this.lastPingTime);
+        const now = Date.now();
+        this.socket.emit('ping_custom', now);
       }, 3000);
     });
 
@@ -54,7 +53,7 @@ export class Network {
     });
 
     this.socket.on('connect_error', (err) => {
-      console.error('[Network] Error:', err.message);
+      console.error('[Network] Error conexión:', err.message);
       this.connected = false;
       this.scheduleReconnect();
     });
@@ -71,26 +70,18 @@ export class Network {
         }
       });
       if (this.game.hud) {
-        this.game.hud.updatePlayers(Object.keys(players).length);
+        this.game.hud.updatePlayers(Object.keys(players).length + 1);
       }
     });
 
     this.socket.on('playerJoined', (data) => {
       if (data.id !== this.playerId) {
         this.game.addRemotePlayer(data.id, data);
-        if (this.game.hud) {
-          const count = Object.keys(this.game.remotePlayers).length + 1;
-          this.game.hud.updatePlayers(count);
-        }
       }
     });
 
     this.socket.on('playerLeft', (id) => {
       this.game.removeRemotePlayer(id);
-      if (this.game.hud) {
-        const count = Object.keys(this.game.remotePlayers).length + 1;
-        this.game.hud.updatePlayers(count);
-      }
     });
 
     this.socket.on('playerMoved', (data) => {
@@ -105,6 +96,11 @@ export class Network {
         const dir = new THREE.Vector3(data.dir.x, data.dir.y, data.dir.z);
         const to = from.clone().addScaledVector(dir, 100);
         this.game.spawnBulletTrail(from, to);
+
+        // Sonido de disparo remoto (más suave)
+        if (this.game.sounds) {
+          this.game.sounds.playShot('rifle');
+        }
       }
     });
 
@@ -118,26 +114,36 @@ export class Network {
       if (data.id === this.playerId) {
         this.game.showDeathScreen();
       } else {
-        this.game.removeRemotePlayer(data.id);
+        const rp = this.game.remotePlayers[data.id];
+        const victimName = rp ? rp.name : data.id.slice(0, 6);
+
         if (data.killerId === this.playerId) {
-          this.game.player.kills++;
-          if (this.game.hud) {
-            this.game.hud.updateKills(this.game.player.kills);
-            this.game.hud.addKillFeed(this.playerName, data.id.slice(0, 6));
-          }
+          this.game.onEnemyKilled(data.id, victimName);
         } else {
+          this.game.removeRemotePlayer(data.id);
           if (this.game.hud) {
-            this.game.hud.addKillFeed('Player', data.id.slice(0, 6));
+            this.game.hud.addKillFeed(
+              data.killerName || 'Player',
+              victimName
+            );
           }
         }
       }
     });
 
     this.socket.on('respawn', (data) => {
-      this.game.player.camera.position.set(data.x, data.y || 1.7, data.z);
+      this.game.player.camera.position.set(
+        data.x,
+        data.y || 1.7,
+        data.z
+      );
       this.game.player.health = 100;
       this.game.player.alive = true;
       if (this.game.hud) this.game.hud.updateHealth(100);
+    });
+
+    this.socket.on('roomFull', () => {
+      alert('Sala llena. Intentá de nuevo en unos minutos.');
     });
   }
 
@@ -180,4 +186,4 @@ export class Network {
     }
     this.connected = false;
   }
-      }
+    }
