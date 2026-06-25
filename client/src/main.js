@@ -16,6 +16,7 @@ import { ProximityChat } from './ProximityChat.js';
 import { Sprint } from './Sprint.js';
 import { Crouch } from './Crouch.js';
 import { GrenadeSystem } from './Grenade.js';
+import { Weather } from './Weather.js';
 
 class Game {
   constructor() {
@@ -38,12 +39,15 @@ class Game {
     this.sprint = null;
     this.crouch = null;
     this.grenades = null;
+    this.weather = null;
     this.remotePlayers = {};
     this.running = false;
     this.clock = { last: 0, delta: 0 };
     this.footstepTimer = 0;
     this.footstepInterval = 0.4;
     this.playerName = 'Player';
+    this.weatherPhaseTimer = 0;
+    this.lastDayPhase = '';
 
     this.init();
   }
@@ -57,7 +61,9 @@ class Game {
     this.hud = new HUD();
     this.player.setHUD(this.hud);
 
-    this.weapons = new WeaponSystem(this.player, this.world.scene, this.world.camera);
+    this.weapons = new WeaponSystem(
+      this.player, this.world.scene, this.world.camera
+    );
     this.player.weapons = this.weapons;
 
     this.particles = new ParticleSystem(this.world.scene);
@@ -67,6 +73,7 @@ class Game {
     this.sprint = new Sprint(this.player, this.sounds);
     this.crouch = new Crouch(this.player, this.sounds);
     this.grenades = new GrenadeSystem(this.world, this);
+    this.weather = new Weather(this.world, this.sounds);
 
     this.controls = new Controls(
       this.player,
@@ -105,13 +112,15 @@ class Game {
 
   startGame() {
     const input = document.getElementById('name-input');
-    this.playerName = input.value.trim() || 'Player_' + Math.floor(Math.random() * 9999);
+    this.playerName = input.value.trim() ||
+      'Player_' + Math.floor(Math.random() * 9999);
 
     document.getElementById('menu').style.display = 'none';
     document.getElementById('hud').style.display = 'block';
     document.getElementById('controls').style.pointerEvents = 'all';
 
     this.zone = new Zone(this.world, this.hud);
+    this.loot = new LootSystem(this.world, this);
     this.minimap.show();
     this.shield.show();
     this.sprint.show();
@@ -124,12 +133,7 @@ class Game {
     this.sounds.resume();
     this.sounds.playWindLoop();
 
-    // Actualizar scoreboard con jugador local
-    this.scoreboard.updatePlayer(
-      'local',
-      this.playerName,
-      0, 0, 100
-    );
+    this.scoreboard.updatePlayer('local', this.playerName, 0, 0, 100);
 
     this.running = true;
     this.loop(0);
@@ -151,27 +155,70 @@ class Game {
     this.sprint.update(dt);
     this.crouch.update(dt);
     this.grenades.update(dt);
+    this.loot && this.loot.update(dt);
 
     if (this.zone) this.zone.update(dt, this.player);
     this.minimap.update();
     this.nameTags.update();
 
+    // Clima integrado con día/noche
+    this.updateWeatherByDayPhase(dt);
+    this.weather.update(dt, this.player.camera.position);
+
     this.updateRemotePlayers(dt);
     this.updateFootsteps(dt);
     this.world.render();
 
-    if (this.network.connected) {
-      this.network.sendState();
+    if (this.network.connected) this.network.sendState();
+
+    this.scoreboard.updatePlayer(
+      'local', this.playerName,
+      this.player.kills || 0, 0, this.player.health
+    );
+  }
+
+  updateWeatherByDayPhase(dt) {
+    const phase = this.world.dayPhase;
+    if (phase === this.lastDayPhase) {
+      this.weatherPhaseTimer -= dt;
+      if (this.weatherPhaseTimer > 0) return;
     }
 
-    // Actualizar scoreboard local
-    this.scoreboard.updatePlayer(
-      'local',
-      this.playerName,
-      this.player.kills || 0,
-      0,
-      this.player.health
-    );
+    this.lastDayPhase = phase;
+    this.weatherPhaseTimer = 30 + Math.random() * 60;
+
+    switch (phase) {
+      case 'dawn':
+        // Amanecer — niebla matutina, a veces lluvia ligera
+        this.weather.setWeather(
+          Math.random() < 0.6 ? 'fog' : 'rain'
+        );
+        break;
+
+      case 'day':
+        // Día — mayormente despejado, lluvia ocasional
+        this.weather.setWeather(
+          Math.random() < 0.7 ? 'clear' :
+          Math.random() < 0.5 ? 'rain' : 'fog'
+        );
+        break;
+
+      case 'dusk':
+        // Atardecer — nubes, viento, lluvia
+        this.weather.setWeather(
+          Math.random() < 0.4 ? 'clear' :
+          Math.random() < 0.5 ? 'rain' : 'storm'
+        );
+        break;
+
+      case 'night':
+        // Noche — tormenta o niebla densa
+        this.weather.setWeather(
+          Math.random() < 0.4 ? 'fog' :
+          Math.random() < 0.5 ? 'storm' : 'rain'
+        );
+        break;
+    }
   }
 
   updateFootsteps(dt) {
@@ -203,10 +250,8 @@ class Game {
       targetPos: { x: data.x, y: data.y || 1.7, z: data.z || 0 },
       targetRot: data.rotY || 0
     };
-
     this.nameTags.addTag(id, data.name || 'Player');
     this.scoreboard.updatePlayer(id, data.name || 'Player', 0, 0, 100);
-
     if (this.hud) {
       this.hud.updatePlayers(Object.keys(this.remotePlayers).length + 1);
     }
@@ -219,7 +264,6 @@ class Game {
     rp.targetRot = data.rotY;
     rp.health = data.health;
     rp.name = data.name || rp.name;
-
     this.nameTags.updateTag(id, data.health);
     this.scoreboard.updatePlayer(id, rp.name, 0, 0, data.health);
   }
@@ -231,7 +275,6 @@ class Game {
     delete this.remotePlayers[id];
     this.nameTags.removeTag(id);
     this.scoreboard.removePlayer(id);
-
     if (this.hud) {
       this.hud.updatePlayers(Object.keys(this.remotePlayers).length + 1);
     }
