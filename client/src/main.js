@@ -19,6 +19,7 @@ import { GrenadeSystem } from './Grenade.js';
 import { Weather } from './Weather.js';
 import { LevelSystem } from './LevelSystem.js';
 import { Achievements } from './Achievements.js';
+import { VehicleSystem } from './Vehicles.js';
 
 class Game {
   constructor() {
@@ -44,6 +45,7 @@ class Game {
     this.weather = null;
     this.levelSystem = null;
     this.achievements = null;
+    this.vehicles = null;
     this.remotePlayers = {};
     this.running = false;
     this.clock = { last: 0, delta: 0 };
@@ -53,7 +55,6 @@ class Game {
     this.weatherPhaseTimer = 0;
     this.lastDayPhase = '';
 
-    // Stats para achievements
     this.stats = {
       kills: 0,
       surviveTime: 0,
@@ -143,6 +144,8 @@ class Game {
 
     this.zone = new Zone(this.world, this.hud);
     this.loot = new LootSystem(this.world, this);
+    this.vehicles = new VehicleSystem(this.world, this);
+
     this.minimap.show();
     this.shield.show();
     this.sprint.show();
@@ -180,6 +183,7 @@ class Game {
     this.crouch.update(dt);
     this.grenades.update(dt);
     if (this.loot) this.loot.update(dt);
+    if (this.vehicles) this.vehicles.update(dt);
 
     if (this.zone) this.zone.update(dt, this.player);
     this.minimap.update();
@@ -204,15 +208,12 @@ class Game {
   updateStats(dt) {
     if (!this.player.alive) return;
 
-    // Tiempo de supervivencia
     this.stats.surviveTime += dt;
     this.stats.health = this.player.health;
     this.stats.level = this.levelSystem.getLevel();
 
-    // XP por supervivencia
     this.levelSystem.onSurvive(dt);
 
-    // Tiempo en zona
     if (this.zone && !this.zone.isOutside(
       this.player.camera.position.x,
       this.player.camera.position.z
@@ -223,12 +224,10 @@ class Game {
       }
     }
 
-    // Sprint distance
     if (this.sprint && this.sprint.isSprinting) {
       this.stats.sprintDistance += this.player.speed * dt;
     }
 
-    // Storm achievement
     if (this.weather && this.weather.current === 'storm') {
       this.stats._stormTimer = (this.stats._stormTimer || 0) + dt;
       if (this.stats._stormTimer >= 60) {
@@ -237,7 +236,6 @@ class Game {
       }
     }
 
-    // Chequear achievements
     this.achievements.check(this.stats);
   }
 
@@ -281,7 +279,7 @@ class Game {
       (Math.abs(this.controls.joystick.dx) > 5 ||
        Math.abs(this.controls.joystick.dy) > 5);
 
-    if (moving && this.player.onGround) {
+    if (moving && this.player.onGround && !this.vehicles?.playerVehicle) {
       this.footstepTimer -= dt;
       if (this.footstepTimer <= 0) {
         this.sounds.playFootstep();
@@ -365,12 +363,9 @@ class Game {
     this.stats.kills++;
     this.player.kills = this.stats.kills;
 
-    // Detectar arma usada
     const weaponKey = this.weapons.currentWeaponKey;
     if (weaponKey === 'sniper') this.stats.sniperKills++;
     if (weaponKey === 'shotgun') this.stats.shotgunKills++;
-
-    // Kill nocturna
     if (this.world.dayPhase === 'night') this.stats.nightKills++;
 
     this.levelSystem.onKill();
@@ -396,6 +391,12 @@ class Game {
   showDeathScreen() {
     this.sounds.playDeath();
     this.player.alive = false;
+
+    // Salir del vehículo si estaba dentro
+    if (this.vehicles && this.vehicles.playerVehicle) {
+      this.vehicles.exitVehicle();
+    }
+
     document.getElementById('death-screen').style.display = 'flex';
     setTimeout(() => {
       document.getElementById('death-screen').style.display = 'none';
