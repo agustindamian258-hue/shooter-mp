@@ -17,6 +17,8 @@ import { Sprint } from './Sprint.js';
 import { Crouch } from './Crouch.js';
 import { GrenadeSystem } from './Grenade.js';
 import { Weather } from './Weather.js';
+import { LevelSystem } from './LevelSystem.js';
+import { Achievements } from './Achievements.js';
 
 class Game {
   constructor() {
@@ -40,6 +42,8 @@ class Game {
     this.crouch = null;
     this.grenades = null;
     this.weather = null;
+    this.levelSystem = null;
+    this.achievements = null;
     this.remotePlayers = {};
     this.running = false;
     this.clock = { last: 0, delta: 0 };
@@ -48,6 +52,22 @@ class Game {
     this.playerName = 'Player';
     this.weatherPhaseTimer = 0;
     this.lastDayPhase = '';
+
+    // Stats para achievements
+    this.stats = {
+      kills: 0,
+      surviveTime: 0,
+      health: 100,
+      itemsPickedUp: 0,
+      grenadeKills: 0,
+      zoneTime: 0,
+      sniperKills: 0,
+      shotgunKills: 0,
+      sprintDistance: 0,
+      nightKills: 0,
+      stormsWeathered: 0,
+      level: 1
+    };
 
     this.init();
   }
@@ -74,6 +94,8 @@ class Game {
     this.crouch = new Crouch(this.player, this.sounds);
     this.grenades = new GrenadeSystem(this.world, this);
     this.weather = new Weather(this.world, this.sounds);
+    this.levelSystem = new LevelSystem(this.hud);
+    this.achievements = new Achievements(this.levelSystem);
 
     this.controls = new Controls(
       this.player,
@@ -128,6 +150,8 @@ class Game {
     this.grenades.show();
     this.chat.show();
     this.scoreboard.show();
+    this.levelSystem.show();
+    this.achievements.show();
 
     this.network.connect(this.playerName);
     this.sounds.resume();
@@ -155,26 +179,66 @@ class Game {
     this.sprint.update(dt);
     this.crouch.update(dt);
     this.grenades.update(dt);
-    this.loot && this.loot.update(dt);
+    if (this.loot) this.loot.update(dt);
 
     if (this.zone) this.zone.update(dt, this.player);
     this.minimap.update();
     this.nameTags.update();
 
-    // Clima integrado con día/noche
     this.updateWeatherByDayPhase(dt);
     this.weather.update(dt, this.player.camera.position);
 
     this.updateRemotePlayers(dt);
     this.updateFootsteps(dt);
+    this.updateStats(dt);
     this.world.render();
 
     if (this.network.connected) this.network.sendState();
 
     this.scoreboard.updatePlayer(
       'local', this.playerName,
-      this.player.kills || 0, 0, this.player.health
+      this.stats.kills, 0, this.player.health
     );
+  }
+
+  updateStats(dt) {
+    if (!this.player.alive) return;
+
+    // Tiempo de supervivencia
+    this.stats.surviveTime += dt;
+    this.stats.health = this.player.health;
+    this.stats.level = this.levelSystem.getLevel();
+
+    // XP por supervivencia
+    this.levelSystem.onSurvive(dt);
+
+    // Tiempo en zona
+    if (this.zone && !this.zone.isOutside(
+      this.player.camera.position.x,
+      this.player.camera.position.z
+    )) {
+      this.stats.zoneTime += dt;
+      if (this.stats.zoneTime % 30 < dt) {
+        this.levelSystem.onZoneTime();
+      }
+    }
+
+    // Sprint distance
+    if (this.sprint && this.sprint.isSprinting) {
+      this.stats.sprintDistance += this.player.speed * dt;
+    }
+
+    // Storm achievement
+    if (this.weather && this.weather.current === 'storm') {
+      this.stats._stormTimer = (this.stats._stormTimer || 0) + dt;
+      if (this.stats._stormTimer >= 60) {
+        this.stats.stormsWeathered++;
+        this.stats._stormTimer = 0;
+      }
+    }
+
+    // Chequear achievements
+    this.achievements.check(this.stats);
   }
 
   updateWeatherByDayPhase(dt) {
@@ -189,30 +253,21 @@ class Game {
 
     switch (phase) {
       case 'dawn':
-        // Amanecer — niebla matutina, a veces lluvia ligera
-        this.weather.setWeather(
-          Math.random() < 0.6 ? 'fog' : 'rain'
-        );
+        this.weather.setWeather(Math.random() < 0.6 ? 'fog' : 'rain');
         break;
-
       case 'day':
-        // Día — mayormente despejado, lluvia ocasional
         this.weather.setWeather(
           Math.random() < 0.7 ? 'clear' :
           Math.random() < 0.5 ? 'rain' : 'fog'
         );
         break;
-
       case 'dusk':
-        // Atardecer — nubes, viento, lluvia
         this.weather.setWeather(
           Math.random() < 0.4 ? 'clear' :
           Math.random() < 0.5 ? 'rain' : 'storm'
         );
         break;
-
       case 'night':
-        // Noche — tormenta o niebla densa
         this.weather.setWeather(
           Math.random() < 0.4 ? 'fog' :
           Math.random() < 0.5 ? 'storm' : 'rain'
@@ -306,11 +361,36 @@ class Game {
     if (rp) this.particles.spawnExplosion(rp.mesh.position.clone());
     this.removeRemotePlayer(id);
     this.sounds.playKill();
+
+    this.stats.kills++;
+    this.player.kills = this.stats.kills;
+
+    // Detectar arma usada
+    const weaponKey = this.weapons.currentWeaponKey;
+    if (weaponKey === 'sniper') this.stats.sniperKills++;
+    if (weaponKey === 'shotgun') this.stats.shotgunKills++;
+
+    // Kill nocturna
+    if (this.world.dayPhase === 'night') this.stats.nightKills++;
+
+    this.levelSystem.onKill();
+    this.achievements.check(this.stats);
+
     if (this.hud) {
-      this.player.kills = (this.player.kills || 0) + 1;
-      this.hud.updateKills(this.player.kills);
+      this.hud.updateKills(this.stats.kills);
       this.hud.addKillFeed(this.playerName, name || id.slice(0, 6));
     }
+  }
+
+  onItemPickup() {
+    this.stats.itemsPickedUp++;
+    this.levelSystem.onPickup();
+    this.achievements.check(this.stats);
+  }
+
+  onGrenadeKill() {
+    this.stats.grenadeKills++;
+    this.achievements.check(this.stats);
   }
 
   showDeathScreen() {
