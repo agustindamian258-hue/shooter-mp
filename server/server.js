@@ -22,7 +22,7 @@ app.get('/', (req, res) => {
     status: 'ok',
     players: gameRoom.getPlayerCount(),
     uptime: Math.round(process.uptime()),
-    version: '2.0'
+    version: '3.0'
   });
 });
 
@@ -33,11 +33,11 @@ app.get('/health', (req, res) => {
 const gameRoom = new GameRoom(io);
 
 io.on('connection', (socket) => {
-  console.log(`[Server] + Conexión: ${socket.id}`);
+  console.log(`[Server] + ${socket.id}`);
   gameRoom.addPlayer(socket);
 
   socket.on('disconnect', (reason) => {
-    console.log(`[Server] - Desconexión: ${socket.id} — ${reason}`);
+    console.log(`[Server] - ${socket.id} (${reason})`);
     gameRoom.removePlayer(socket.id);
   });
 
@@ -55,4 +55,41 @@ io.on('connection', (socket) => {
 
   socket.on('chatMessage', (data) => {
     gameRoom.handleChat(socket.id, data);
-  }
+  });
+
+  socket.on('grenadeThrown', (data) => {
+    gameRoom.handleGrenade(socket.id, data);
+  });
+
+  socket.on('grenadeExploded', (data) => {
+    gameRoom.handleGrenadeExplode(socket.id, data);
+  });
+
+  socket.on('vehicleEnter', (data) => {
+    gameRoom.handleVehicleEnter(socket.id, data);
+  });
+
+  socket.on('vehicleExit', (data) => {
+    gameRoom.handleVehicleExit(socket.id, data);
+  });
+
+  socket.on('vehicleMove', (data) => {
+    gameRoom.handleVehicleMove(socket.id, data);
+  });
+
+  socket.on('ping_custom', (clientTime) => {
+    socket.emit('pong_custom', clientTime);
+  });
+});
+
+httpServer.listen(PORT, () => {
+  console.log(`[Server] Puerto ${PORT} — v3.0`);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Server] Error:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Server] Promesa rechazada:', reason);
+});
