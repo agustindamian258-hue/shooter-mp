@@ -73,6 +73,22 @@ export class Network {
       }
     });
 
+    // Vehículos iniciales
+    this.socket.on('currentVehicles', (vehicles) => {
+      // Los vehículos ya están creados en el cliente
+      // Solo sincronizamos estado
+      if (!this.game.vehicles) return;
+      Object.entries(vehicles).forEach(([id, data]) => {
+        const v = this.game.vehicles.vehicles[id];
+        if (v) {
+          v.mesh.position.set(data.x, data.y, data.z);
+          v.mesh.rotation.y = data.rotY;
+          v.occupied = data.occupied;
+          v.health = data.health;
+        }
+      });
+    });
+
     this.socket.on('playerJoined', (data) => {
       if (data.id !== this.playerId) {
         this.game.addRemotePlayer(data.id, data);
@@ -101,7 +117,6 @@ export class Network {
 
     this.socket.on('hitReceived', (data) => {
       if (data.targetId === this.playerId) {
-        // Escudo absorbe primero
         let damage = data.damage;
         if (this.game.shield && this.game.shield.current > 0) {
           damage = this.game.shield.takeDamage(damage);
@@ -145,7 +160,7 @@ export class Network {
       }
     });
 
-    // Granada remota
+    // Granadas
     this.socket.on('grenadeExploded', (data) => {
       if (this.game.particles) {
         const pos = new THREE.Vector3(data.x, data.y, data.z);
@@ -155,7 +170,6 @@ export class Network {
         this.game.sounds.playBuffer(this.game.sounds.sounds.shotgun, 1.0);
       }
 
-      // Daño si el jugador local está cerca
       const playerPos = this.game.player.camera.position;
       const dx = data.x - playerPos.x;
       const dy = data.y - playerPos.y;
@@ -170,6 +184,22 @@ export class Network {
         }
         if (damage > 0) this.game.player.takeDamage(damage);
       }
+    });
+
+    // Vehículos
+    this.socket.on('vehicleUpdated', (data) => {
+      if (!this.game.vehicles) return;
+      const v = this.game.vehicles.vehicles[data.vehicleId || data.id];
+      if (v) {
+        v.occupied = data.occupied;
+        v.occupantId = data.occupantId;
+        v.health = data.health;
+      }
+    });
+
+    this.socket.on('vehicleMoved', (data) => {
+      if (!this.game.vehicles) return;
+      this.game.vehicles.updateRemoteVehicle(data);
     });
 
     this.socket.on('roomFull', () => {
@@ -197,11 +227,8 @@ export class Network {
   sendChatMessage(text, position) {
     if (!this.connected) return;
     this.socket.emit('chatMessage', {
-      text,
-      name: this.playerName,
-      x: position.x,
-      y: position.y,
-      z: position.z
+      text, name: this.playerName,
+      x: position.x, y: position.y, z: position.z
     });
   }
 
@@ -211,7 +238,8 @@ export class Network {
       return;
     }
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const delay = this.reconnectDelay * Math.min(this.reconnectAttempts + 1, 5);
+    const delay = this.reconnectDelay *
+      Math.min(this.reconnectAttempts + 1, 5);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectAttempts++;
       this.connect(this.playerName);
@@ -227,4 +255,4 @@ export class Network {
     }
     this.connected = false;
   }
-        }
+          }
