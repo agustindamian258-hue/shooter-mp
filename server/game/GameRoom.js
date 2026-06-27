@@ -4,10 +4,38 @@ class GameRoom {
   constructor(io) {
     this.io = io;
     this.players = {};
+    this.vehicles = {};
     this.maxPlayers = 20;
     this.tickRate = 20;
 
+    this.initVehicles();
     setInterval(() => this.tick(), 1000 / this.tickRate);
+  }
+
+  initVehicles() {
+    const spawns = [
+      { x: 20,  z: 0,   rot: 0 },
+      { x: -30, z: 20,  rot: Math.PI / 4 },
+      { x: 40,  z: -30, rot: Math.PI },
+      { x: -20, z: -40, rot: Math.PI / 2 },
+      { x: 60,  z: 40,  rot: Math.PI * 1.5 },
+      { x: -60, z: -20, rot: 0 }
+    ];
+
+    spawns.forEach((s, i) => {
+      const id = 'vehicle_' + i;
+      this.vehicles[id] = {
+        id,
+        type: 'jeep',
+        x: s.x, y: 0.5, z: s.z,
+        rotY: s.rot,
+        health: 200,
+        maxHealth: 200,
+        occupied: false,
+        occupantId: null,
+        speed: 0
+      };
+    });
   }
 
   addPlayer(socket) {
@@ -17,7 +45,8 @@ class GameRoom {
       return;
     }
 
-    const name = socket.handshake.query.name || 'Player_' + socket.id.slice(0, 4);
+    const name = socket.handshake.query.name ||
+      'Player_' + socket.id.slice(0, 4);
     const x = (Math.random() - 0.5) * 100;
     const z = (Math.random() - 0.5) * 100;
 
@@ -25,11 +54,10 @@ class GameRoom {
 
     const currentPlayers = {};
     Object.entries(this.players).forEach(([id, p]) => {
-      if (id !== socket.id) {
-        currentPlayers[id] = p.serialize();
-      }
+      if (id !== socket.id) currentPlayers[id] = p.serialize();
     });
     socket.emit('currentPlayers', currentPlayers);
+    socket.emit('currentVehicles', this.vehicles);
 
     socket.broadcast.emit('playerJoined', {
       id: socket.id,
@@ -42,6 +70,17 @@ class GameRoom {
   removePlayer(id) {
     if (!this.players[id]) return;
     const name = this.players[id].name;
+
+    // Liberar vehículo si estaba dentro
+    Object.values(this.vehicles).forEach(v => {
+      if (v.occupantId === id) {
+        v.occupied = false;
+        v.occupantId = null;
+        v.speed = 0;
+        this.io.emit('vehicleUpdated', v);
+      }
+    });
+
     delete this.players[id];
     this.io.emit('playerLeft', id);
     console.log(`[GameRoom] - ${name}`);
@@ -59,7 +98,7 @@ class GameRoom {
     const maxDist = maxSpeed * Math.max(timeDelta, 0.05) * 1.5;
 
     if (dist > maxDist && player.lastUpdate !== 0) {
-      console.warn(`[GameRoom] Movimiento sospechoso: ${player.name} ${dist.toFixed(1)}px`);
+      console.warn(`[GameRoom] Mov. sospechoso: ${player.name}`);
       return;
     }
 
@@ -84,18 +123,16 @@ class GameRoom {
     if (!player) return;
 
     const now = Date.now();
-    const minFireInterval = 80;
-    if (now - player.lastFired < minFireInterval) return;
+    if (now - player.lastFired < 80) return;
     player.lastFired = now;
 
-    const sockets = Array.from(this.io.sockets.sockets.keys()).filter(s => s !== id);
+    const sockets = Array.from(
+      this.io.sockets.sockets.keys()
+    ).filter(s => s !== id);
+
     sockets.forEach(sid => {
       const s = this.io.sockets.sockets.get(sid);
-      if (s) s.emit('playerShot', {
-        id,
-        from: data.from,
-        dir: data.dir
-      });
+      if (s) s.emit('playerShot', { id, from: data.from, dir: data.dir });
     });
   }
 
@@ -106,8 +143,6 @@ class GameRoom {
 
     const damage = Math.min(Math.max(data.damage || 25, 1), 100);
     const died = target.takeDamage(damage);
-
-    console.log(`[GameRoom] ${shooter.name} → ${target.name} (${damage} dmg, HP: ${target.health})`);
 
     const targetSocket = this.io.sockets.sockets.get(data.targetId);
     if (targetSocket) {
@@ -120,8 +155,6 @@ class GameRoom {
 
     if (died) {
       shooter.kills++;
-      console.log(`[GameRoom] ${shooter.name} eliminó a ${target.name}`);
-
       this.io.emit('playerKilled', {
         id: data.targetId,
         killerId: shooterId,
@@ -133,13 +166,11 @@ class GameRoom {
         if (this.players[data.targetId]) {
           this.players[data.targetId].respawn();
           const ts = this.io.sockets.sockets.get(data.targetId);
-          if (ts) {
-            ts.emit('respawn', {
-              x: this.players[data.targetId].x,
-              y: 1.7,
-              z: this.players[data.targetId].z
-            });
-          }
+          if (ts) ts.emit('respawn', {
+            x: this.players[data.targetId].x,
+            y: 1.7,
+            z: this.players[data.targetId].z
+          });
         }
       }, 3000);
     }
@@ -148,14 +179,9 @@ class GameRoom {
   handleChat(senderId, data) {
     const player = this.players[senderId];
     if (!player) return;
-
-    // Validar texto
     const text = String(data.text || '').slice(0, 60).trim();
     if (!text) return;
 
-    console.log(`[Chat] ${player.name}: ${text}`);
-
-    // Broadcast a todos los demás con posición del emisor
     this.io.emit('chatMessage', {
       senderId,
       name: player.name,
@@ -170,18 +196,15 @@ class GameRoom {
     const player = this.players[throwerId];
     if (!player) return;
 
-    // Broadcast granada a todos menos al lanzador
-    const sockets = Array.from(this.io.sockets.sockets.keys()).filter(s => s !== throwerId);
+    const sockets = Array.from(
+      this.io.sockets.sockets.keys()
+    ).filter(s => s !== throwerId);
+
     sockets.forEach(sid => {
       const s = this.io.sockets.sockets.get(sid);
       if (s) s.emit('grenadeThrown', {
-        throwerId,
-        x: data.x,
-        y: data.y,
-        z: data.z,
-        vx: data.vx,
-        vy: data.vy,
-        vz: data.vz
+        throwerId, x: data.x, y: data.y, z: data.z,
+        vx: data.vx, vy: data.vy, vz: data.vz
       });
     });
   }
@@ -190,17 +213,13 @@ class GameRoom {
     const player = this.players[throwerId];
     if (!player) return;
 
-    // Broadcast explosión a todos
     this.io.emit('grenadeExploded', {
       throwerId,
-      x: data.x,
-      y: data.y,
-      z: data.z,
+      x: data.x, y: data.y, z: data.z,
       radius: Math.min(data.radius || 8, 15),
       damage: Math.min(data.damage || 80, 100)
     });
 
-    // Aplicar daño server-side a jugadores cercanos
     Object.entries(this.players).forEach(([id, p]) => {
       if (id === throwerId) return;
       const dx = data.x - p.x;
@@ -212,33 +231,23 @@ class GameRoom {
       if (dist < radius) {
         const dmg = Math.round(data.damage * (1 - dist / radius));
         const died = p.takeDamage(dmg);
-
-        const targetSocket = this.io.sockets.sockets.get(id);
-        if (targetSocket) {
-          targetSocket.emit('hitReceived', {
-            targetId: id,
-            shooterId: throwerId,
-            damage: dmg
-          });
-        }
+        const ts = this.io.sockets.sockets.get(id);
+        if (ts) ts.emit('hitReceived', {
+          targetId: id, shooterId: throwerId, damage: dmg
+        });
 
         if (died) {
           player.kills++;
           this.io.emit('playerKilled', {
-            id,
-            killerId: throwerId,
-            killerName: player.name,
-            victimName: p.name
+            id, killerId: throwerId,
+            killerName: player.name, victimName: p.name
           });
-
           setTimeout(() => {
             if (this.players[id]) {
               this.players[id].respawn();
-              const ts = this.io.sockets.sockets.get(id);
-              if (ts) ts.emit('respawn', {
-                x: this.players[id].x,
-                y: 1.7,
-                z: this.players[id].z
+              const s = this.io.sockets.sockets.get(id);
+              if (s) s.emit('respawn', {
+                x: this.players[id].x, y: 1.7, z: this.players[id].z
               });
             }
           }, 3000);
@@ -247,8 +256,46 @@ class GameRoom {
     });
   }
 
+  handleVehicleEnter(playerId, data) {
+    const vehicle = this.vehicles[data.vehicleId];
+    const player = this.players[playerId];
+    if (!vehicle || !player || vehicle.occupied) return;
+
+    vehicle.occupied = true;
+    vehicle.occupantId = playerId;
+    this.io.emit('vehicleUpdated', vehicle);
+    console.log(`[GameRoom] ${player.name} entró al vehículo ${data.vehicleId}`);
+  }
+
+  handleVehicleExit(playerId, data) {
+    const vehicle = this.vehicles[data.vehicleId];
+    if (!vehicle || vehicle.occupantId !== playerId) return;
+
+    vehicle.occupied = false;
+    vehicle.occupantId = null;
+    vehicle.speed = 0;
+    this.io.emit('vehicleUpdated', vehicle);
+  }
+
+  handleVehicleMove(playerId, data) {
+    const vehicle = this.vehicles[data.vehicleId];
+    if (!vehicle || vehicle.occupantId !== playerId) return;
+
+    vehicle.x = Math.max(-195, Math.min(195, data.x));
+    vehicle.y = data.y || 0.5;
+    vehicle.z = Math.max(-195, Math.min(195, data.z));
+    vehicle.rotY = data.rotY;
+    vehicle.speed = data.speed;
+
+    this.io.volatile.emit('vehicleMoved', {
+      vehicleId: data.vehicleId,
+      x: vehicle.x, y: vehicle.y, z: vehicle.z,
+      rotY: vehicle.rotY, speed: vehicle.speed
+    });
+  }
+
   tick() {
-    // Futuro: zona server-side, eventos
+    // Futuro: zona server-side
   }
 
   getPlayerCount() {
