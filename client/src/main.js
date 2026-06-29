@@ -20,6 +20,9 @@ import { Weather } from './Weather.js';
 import { LevelSystem } from './LevelSystem.js';
 import { Achievements } from './Achievements.js';
 import { VehicleSystem } from './Vehicles.js';
+import { Inventory } from './Inventory.js';
+import { EndScreen } from './EndScreen.js';
+import { SkinSystem } from './Skins.js';
 
 class Game {
   constructor() {
@@ -46,6 +49,9 @@ class Game {
     this.levelSystem = null;
     this.achievements = null;
     this.vehicles = null;
+    this.inventory = null;
+    this.endScreen = null;
+    this.skins = null;
     this.remotePlayers = {};
     this.running = false;
     this.clock = { last: 0, delta: 0 };
@@ -54,6 +60,7 @@ class Game {
     this.playerName = 'Player';
     this.weatherPhaseTimer = 0;
     this.lastDayPhase = '';
+    this.inventorySyncTimer = 0;
 
     this.stats = {
       kills: 0,
@@ -67,7 +74,10 @@ class Game {
       sprintDistance: 0,
       nightKills: 0,
       stormsWeathered: 0,
-      level: 1
+      level: 1,
+      shots: 0,
+      hits: 0,
+      totalPlayers: 1
     };
 
     this.init();
@@ -97,15 +107,14 @@ class Game {
     this.weather = new Weather(this.world, this.sounds);
     this.levelSystem = new LevelSystem(this.hud);
     this.achievements = new Achievements(this.levelSystem);
+    this.inventory = new Inventory(this);
+    this.endScreen = new EndScreen(this);
+    this.skins = new SkinSystem(this);
 
     this.controls = new Controls(
-      this.player,
-      this.world.camera,
-      this.weapons,
-      this.sounds,
-      this.sprint,
-      this.crouch,
-      this.grenades
+      this.player, this.world.camera,
+      this.weapons, this.sounds,
+      this.sprint, this.crouch, this.grenades
     );
 
     this.minimap = new Minimap(this);
@@ -120,6 +129,7 @@ class Game {
     setTimeout(() => {
       document.getElementById('loading').style.display = 'none';
       document.getElementById('menu').style.display = 'flex';
+      this.skins.showInMenu();
     }, 2000);
   }
 
@@ -127,7 +137,7 @@ class Game {
     const bar = document.getElementById('loading-bar');
     let p = 0;
     const iv = setInterval(() => {
-      p += Math.random() * 15;
+      p += Math.random() * 12;
       if (p >= 100) { p = 100; clearInterval(iv); }
       bar.style.width = p + '%';
     }, 150);
@@ -141,6 +151,7 @@ class Game {
     document.getElementById('menu').style.display = 'none';
     document.getElementById('hud').style.display = 'block';
     document.getElementById('controls').style.pointerEvents = 'all';
+    this.skins.menuBtn.style.display = 'none';
 
     this.zone = new Zone(this.world, this.hud);
     this.loot = new LootSystem(this.world, this);
@@ -155,6 +166,7 @@ class Game {
     this.scoreboard.show();
     this.levelSystem.show();
     this.achievements.show();
+    this.inventory.show();
 
     this.network.connect(this.playerName);
     this.sounds.resume();
@@ -195,6 +207,14 @@ class Game {
     this.updateRemotePlayers(dt);
     this.updateFootsteps(dt);
     this.updateStats(dt);
+
+    // Sync inventario cada 1 segundo
+    this.inventorySyncTimer += dt;
+    if (this.inventorySyncTimer >= 1) {
+      this.inventorySyncTimer = 0;
+      this.inventory.syncWithWeapons();
+    }
+
     this.world.render();
 
     if (this.network.connected) this.network.sendState();
@@ -211,6 +231,7 @@ class Game {
     this.stats.surviveTime += dt;
     this.stats.health = this.player.health;
     this.stats.level = this.levelSystem.getLevel();
+    this.stats.totalPlayers = Object.keys(this.remotePlayers).length + 1;
 
     this.levelSystem.onSurvive(dt);
 
@@ -245,7 +266,6 @@ class Game {
       this.weatherPhaseTimer -= dt;
       if (this.weatherPhaseTimer > 0) return;
     }
-
     this.lastDayPhase = phase;
     this.weatherPhaseTimer = 30 + Math.random() * 60;
 
@@ -351,6 +371,7 @@ class Game {
   onEnemyHit(position) {
     this.particles.spawnBlood(position);
     this.sounds.playHitConfirm();
+    this.stats.hits++;
     if (this.hud) this.hud.showHitMarker();
   }
 
@@ -381,6 +402,7 @@ class Game {
     this.stats.itemsPickedUp++;
     this.levelSystem.onPickup();
     this.achievements.check(this.stats);
+    this.inventory.syncWithWeapons();
   }
 
   onGrenadeKill() {
@@ -392,25 +414,34 @@ class Game {
     this.sounds.playDeath();
     this.player.alive = false;
 
-    // Salir del vehículo si estaba dentro
     if (this.vehicles && this.vehicles.playerVehicle) {
       this.vehicles.exitVehicle();
     }
 
+    // Mostrar pantalla de resultados después de 3 segundos
     document.getElementById('death-screen').style.display = 'flex';
     setTimeout(() => {
       document.getElementById('death-screen').style.display = 'none';
-      this.player.respawn();
-      this.shield.current = 0;
-      this.shield.updateUI();
-      if (this.weapons) {
-        this.weapons.currentWeapon.ammo = this.weapons.currentWeapon.maxAmmo;
-        if (this.hud) {
-          this.hud.updateHealth(100);
-          this.hud.updateAmmo(
-            this.weapons.currentWeapon.ammo,
-            this.weapons.currentWeapon.reserve
-          );
+
+      // Si quedan jugadores, respawnear. Si no, mostrar resultados finales
+      const playersLeft = Object.keys(this.remotePlayers).length;
+      if (playersLeft === 0 || this.stats.kills >= 1) {
+        const placement = playersLeft + 1;
+        this.endScreen.show(this.stats, placement);
+        this.running = false;
+      } else {
+        this.player.respawn();
+        this.shield.current = 0;
+        this.shield.updateUI();
+        if (this.weapons) {
+          this.weapons.currentWeapon.ammo = this.weapons.currentWeapon.maxAmmo;
+          if (this.hud) {
+            this.hud.updateHealth(100);
+            this.hud.updateAmmo(
+              this.weapons.currentWeapon.ammo,
+              this.weapons.currentWeapon.reserve
+            );
+          }
         }
       }
     }, 3000);
