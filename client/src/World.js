@@ -4,7 +4,7 @@ export class World {
     this.game = null;
     this.bullets = [];
     this.dayTime = 0;
-    this.dayDuration = 300;
+    this.dayDuration = 900;
     this.dayPhase = 'day';
     this.windowLights = [];
 
