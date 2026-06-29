@@ -1106,4 +1106,4 @@ export class World {
 
     this.renderer.render(this.scene, this.camera);
   }
-      }
+         }
